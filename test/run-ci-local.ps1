@@ -50,8 +50,9 @@ try {
     }
 
     Step 'Self-test (17 assertions)' {
+        # run-tests.ps1 throws on failure and does not call `exit`,
+        # so a thrown exception is the only failure signal.
         & $tests *> $null
-        if ($LASTEXITCODE -ne 0) { throw "run-tests.ps1 exited $LASTEXITCODE" }
     }
 
     Step 'Scan repo expects exit 0 (clean)' {

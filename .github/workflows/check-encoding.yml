@@ -1,8 +1,28 @@
 name: Encoding guard
 
-# The bug this tool detects is specific to Windows PowerShell 5.1, so the
-# windows-latest job below is the authoritative check. The linux job exists
-# to confirm the script and its tests stay cross-platform.
+# The bug this detector finds is specific to Windows PowerShell 5.1, so the
+# windows-latest job is the authoritative check. The linux job confirms the
+# script and its tests stay cross-platform.
+#
+# ---------------------------------------------------------------------------
+# Two CI rules are baked into every step below:
+#
+# 1. A step that runs a script must END with an explicit `exit 0`.
+#    GitHub executes `shell: powershell` steps as:
+#        powershell -command ". 'step.ps1'"
+#    Because the step is dot-sourced, any leftover non-zero $LASTEXITCODE from
+#    a call inside the step can surface as the step's exit code and turn a
+#    passing step red. Ending with `exit 0` makes the result depend only on
+#    our own assertions.
+#
+# 2. run-tests.ps1 never calls `exit`; it throws on failure. That keeps it
+#    safe to invoke from a dot-sourced step. fix-ps1-encoding.ps1 DOES use
+#    `exit` — that is its public contract as a lint tool — so its code is
+#    read from $LASTEXITCODE and then neutralised by rule 1.
+#
+# Cross-platform note: `$env:TEMP` only exists on Windows.
+# Use [System.IO.Path]::GetTempPath() everywhere.
+# ---------------------------------------------------------------------------
 
 on:
   push:
@@ -16,8 +36,7 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------
-  # Authoritative: Windows PowerShell 5.1 — the version that mangles
-  # UTF-8-without-BOM scripts and reports bogus bracket errors.
+  # Authoritative: Windows PowerShell 5.1
   # ---------------------------------------------------------------
   windows-ps5:
     name: Windows PowerShell 5.1 (authoritative)
@@ -30,35 +49,38 @@ jobs:
         run: |
           $PSVersionTable.PSVersion.ToString()
           Write-Host "ErrorActionPreference = $ErrorActionPreference"
-          Write-Host "PWD = $PWD"
+          Write-Host "TempPath = $([System.IO.Path]::GetTempPath())"
+          exit 0
 
       - name: Self-test (17 assertions)
         shell: powershell
-        run: .\test\run-tests.ps1
+        run: |
+          # run-tests.ps1 throws on failure and does not call `exit`, so a
+          # thrown exception is what marks this step red.
+          .\test\run-tests.ps1
+          Write-Host 'Self-test passed.'
+          exit 0
 
       - name: Scan repo for unencoded scripts (expect clean)
         shell: powershell
         run: |
-          # Exit codes: 0 = clean, 1 = findings, 2 = tool failure.
-          # This repository is itself the safe example, so a clean scan is expected.
           .\fix-ps1-encoding.ps1 -Path . -Json
           $code = $LASTEXITCODE
-          if ($code -ne 0) {
-            throw "Expected a clean scan (exit 0), got $code"
-          }
+          Write-Host "guard exit code = $code"
+          if ($code -ne 0) { throw "Expected a clean scan (exit 0), got $code" }
           Write-Host 'Scan clean.'
+          exit 0
 
       - name: Prove -Apply is a no-op on a clean tree
         shell: powershell
         run: |
           .\fix-ps1-encoding.ps1 -Path . -Apply -Json
           $code = $LASTEXITCODE
-          if ($code -ne 0) {
-            throw "Expected exit code 0 after -Apply, got $code"
-          }
+          Write-Host "guard exit code = $code"
+          if ($code -ne 0) { throw "Expected exit 0 after -Apply, got $code" }
 
-          # `git status --porcelain` returns an array in PowerShell and a
-          # non-empty array is truthy, so count the lines instead.
+          # `git status --porcelain` returns an array; a non-empty array is
+          # truthy, so count the entries instead.
           $changes = @(git status --porcelain)
           if ($changes.Count -gt 0) {
             Write-Host 'Unexpected working-tree changes:'
@@ -66,20 +88,19 @@ jobs:
             throw "git status is not clean after -Apply ($($changes.Count) entries)"
           }
           Write-Host 'Working tree still clean.'
+          exit 0
 
       - name: Detect a deliberately broken fixture
         shell: powershell
         run: |
-          # Diagnostics first: if this step ever fails again, the log must say why.
-          Write-Host "RUNNER_TEMP = $env:RUNNER_TEMP"
-          Write-Host "ErrorActionPreference = $ErrorActionPreference"
+          Write-Host "TempPath = $([System.IO.Path]::GetTempPath())"
 
-          $dir = Join-Path $env:RUNNER_TEMP 'broken-fixture'
+          $dir = Join-Path ([System.IO.Path]::GetTempPath()) 'broken-fixture'
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           $file = Join-Path $dir 'needs-bom.ps1'
           $text = "# " + [char]0x4E2D + [char]0x6587 + "`nWrite-Host 'hi'`n"
 
-          # Write UTF-8 WITHOUT a BOM on purpose — that is the condition we detect.
+          # UTF-8 WITHOUT a BOM on purpose — that is the condition we detect.
           [System.IO.File]::WriteAllText($file, $text, (New-Object System.Text.UTF8Encoding($false)))
 
           $bytes = [System.IO.File]::ReadAllBytes($file)
@@ -93,13 +114,12 @@ jobs:
           .\fix-ps1-encoding.ps1 -Path $dir -Json
           $code = $LASTEXITCODE
           Write-Host "guard exit code = $code"
-          if ($code -ne 1) {
-            throw "Expected exit 1 (findings present), got $code"
-          }
+          if ($code -ne 1) { throw "Expected exit 1 (findings present), got $code" }
           Write-Host 'Correctly flagged the unencoded fixture.'
+          exit 0
 
   # ---------------------------------------------------------------
-  # Compatibility: PowerShell 7 on Linux (no powershell.exe there).
+  # Compatibility: PowerShell 7 on Linux
   # ---------------------------------------------------------------
   linux-pwsh7:
     name: Linux PowerShell 7 (compatibility)
@@ -112,28 +132,27 @@ jobs:
         run: |
           $PSVersionTable.PSVersion.ToString()
           Write-Host "ErrorActionPreference = $ErrorActionPreference"
-          Write-Host "PWD = $PWD"
+          Write-Host "TempPath = $([System.IO.Path]::GetTempPath())"
+          exit 0
 
       - name: Self-test (17 assertions)
         shell: pwsh
-        run: ./test/run-tests.ps1
+        run: |
+          # run-tests.ps1 throws on failure and does not call `exit`.
+          ./test/run-tests.ps1
+          Write-Host 'Self-test passed.'
+          exit 0
 
-      - name: Tool runs without internal failure
+      - name: Repo scan runs and the tool detects a broken fixture
         shell: pwsh
         run: |
-          # On PS7 the repo's own files parse fine, so findings may legitimately be 0.
-          # Exit code 2 means the tool itself failed — that is the real failure here.
+          # On PS7 the repo's own files parse fine, so a clean scan (exit 0)
+          # is expected here.
           ./fix-ps1-encoding.ps1 -Path . -Json
-          $code = $LASTEXITCODE
-          Write-Host "guard exit code = $code"
-          if ($code -eq 2) {
-            throw 'Tool reported an internal failure (exit 2)'
-          }
-          Write-Host 'Tool executed successfully.'
+          $repoCode = $LASTEXITCODE
+          Write-Host "repo scan exit code = $repoCode"
+          if ($repoCode -ne 0) { throw "Expected a clean repo scan, got $repoCode" }
 
-      - name: Detect a deliberately broken fixture (cross-platform check)
-        shell: pwsh
-        run: |
           $dir = Join-Path ([System.IO.Path]::GetTempPath()) 'broken-fixture'
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           $file = Join-Path $dir 'needs-bom.ps1'
@@ -142,8 +161,7 @@ jobs:
 
           ./fix-ps1-encoding.ps1 -Path $dir -Json
           $code = $LASTEXITCODE
-          Write-Host "guard exit code = $code"
-          if ($code -ne 1) {
-            throw "Expected exit 1 (findings present), got $code"
-          }
+          Write-Host "fixture scan exit code = $code"
+          if ($code -ne 1) { throw "Expected exit 1 (findings present), got $code" }
           Write-Host 'Correctly flagged the unencoded fixture.'
+          exit 0
