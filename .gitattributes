@@ -1,0 +1,26 @@
+# Normalize line endings so the repo behaves the same on Windows, Linux and macOS.
+# Without this, a Windows clone (core.autocrlf=true) can rewrite every file and
+# make `git status` dirty for no reason, and diffs get noisy across platforms.
+
+* text=auto eol=lf
+
+# PowerShell scripts are NOT normalized.
+# On Windows PowerShell 5.1 an LF-only .ps1 can behave oddly, and this project
+# commits some files with a UTF-8 BOM whose byte-for-byte layout matters to the
+# encoding checks. Keeping them as authored avoids any surprises.
+*.ps1  -text
+*.psm1 -text
+*.psd1 -text
+
+# Explicitness for the formats in this repo
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+
+# Binary-ish files that should never be line-ending converted
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.zip  binary

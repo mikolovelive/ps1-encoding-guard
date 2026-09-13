@@ -1,7 +1,10 @@
 ﻿# ============================================================
 #  Local simulation of the GitHub Actions workflow assertions.
-#  Runs the same checks the CI jobs run, on this machine
-#  (Windows PowerShell 5.1 == the windows-latest job).
+#  Runs the same checks CI runs, on this machine.
+#
+#  On Windows this exercises Windows PowerShell 5.1 — the exact parser
+#  the windows-latest job uses, so that authoritative job is fully
+#  reproducible locally.
 #
 #  Usage:  .\test\run-ci-local.ps1
 #  Exit codes: 0 = all assertions held, 1 = at least one failed
@@ -30,11 +33,17 @@ function Step {
     }
 }
 
+function New-Utf8NoBomFile {
+    param([string]$Path, [string]$Content)
+    [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 Push-Location $repoRoot
 try {
     Write-Host ''
     Write-Host ("Repo   : " + $repoRoot)
     Write-Host ("Parser : " + $PSVersionTable.PSVersion.ToString())
+    Write-Host ("EA pref: " + $ErrorActionPreference)
 
     Step 'Show parser version' {
         if (-not $PSVersionTable.PSVersion) { throw 'no version info' }
@@ -67,8 +76,7 @@ try {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         try {
             $file = Join-Path $dir 'needs-bom.ps1'
-            $text = "# " + [char]0x4E2D + [char]0x6587 + "`nWrite-Host 'hi'`n"
-            [System.IO.File]::WriteAllText($file, $text, (New-Object System.Text.UTF8Encoding($false)))
+            New-Utf8NoBomFile -Path $file -Content "# $([char]0x4E2D)$([char]0x6587)`nWrite-Host 'hi'`n"
 
             & $guard -Path $dir -Json *> $null
             if ($LASTEXITCODE -ne 1) { throw "expected 1 (findings), got $LASTEXITCODE" }
@@ -77,7 +85,7 @@ try {
         }
     }
 
-    Step 'YAML workflow file is well-formed (indent + key checks)' {
+    Step 'YAML workflow is well-formed (keys + no tabs)' {
         $wf = Join-Path $repoRoot '.github\workflows\check-encoding.yml'
         if (-not (Test-Path -LiteralPath $wf)) { throw 'workflow file missing' }
         $lines = Get-Content -LiteralPath $wf
@@ -85,8 +93,57 @@ try {
         foreach ($needle in @('runs-on: windows-latest', 'runs-on: ubuntu-latest', 'shell: powershell', 'shell: pwsh')) {
             if (-not ($lines -match [regex]::Escape($needle))) { throw "missing: $needle" }
         }
-        # Every tab is illegal in YAML
         if ($lines | Where-Object { $_ -match "`t" }) { throw 'YAML contains a tab character' }
+    }
+
+    # ----------------------------------------------------------------
+    # Cross-platform guards.
+    #
+    # These exist because a hardcoded '\' in a test assertion passed on
+    # Windows but failed on the Linux runner. A local Windows run cannot
+    # execute under Linux, so instead we statically forbid the pattern
+    # and verify the path-normalization contract directly.
+    # ----------------------------------------------------------------
+    Step 'No hardcoded backslash as path separator in comparisons' {
+        $suspect = @()
+        Get-ChildItem -LiteralPath $repoRoot -Recurse -Force -File -Filter '*.ps1' |
+            Where-Object { $_.FullName -notmatch '\\\.git\\' } |
+            ForEach-Object {
+                $n = 0
+                foreach ($line in (Get-Content -LiteralPath $_.FullName)) {
+                    $n++
+                    if ($line -match "-contains\s+'[^']*\\\w" -or $line -match "-eq\s+'[^']*\\\w") {
+                        $suspect += ("{0}:{1}" -f $_.Name, $n)
+                    }
+                }
+            }
+        if ($suspect.Count -gt 0) {
+            throw ("hardcoded separator in comparison -> " + ($suspect -join ', '))
+        }
+    }
+
+    Step 'Relative paths normalize to forward slashes' {
+        $dir = Join-Path $env:TEMP ('ci-rel-' + (Get-Date -Format 'HHmmssfff'))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        try {
+            $sub = Join-Path $dir 'sub'
+            New-Item -ItemType Directory -Path $sub -Force | Out-Null
+            New-Utf8NoBomFile -Path (Join-Path $sub 'x.ps1') -Content "# $([char]0x4E2D)`n"
+
+            $json = & $guard -Path $dir -Json | ConvertFrom-Json
+            $norm = $json.findings[0].Relative -replace '\\', '/'
+            if ($norm -ne 'sub/x.ps1') { throw "expected 'sub/x.ps1', got '$norm'" }
+        } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Step '.gitattributes normalizes line endings' {
+        $ga = Join-Path $repoRoot '.gitattributes'
+        if (-not (Test-Path -LiteralPath $ga)) { throw '.gitattributes missing' }
+        $text = Get-Content -LiteralPath $ga -Raw
+        if ($text -notmatch 'text=auto') { throw 'missing text=auto' }
+        if ($text -notmatch 'eol=lf') { throw 'missing eol=lf' }
     }
 } finally {
     Pop-Location

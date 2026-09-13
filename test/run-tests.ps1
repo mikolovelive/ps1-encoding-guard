@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 #  Self-test for fix-ps1-encoding.ps1
 #  Creates fixtures (good + bad scripts), runs the guard against
 #  them, and asserts the detection result. ASCII-only on purpose.
@@ -60,13 +60,14 @@ try {
     [System.IO.File]::WriteAllText($f4, "# " + [char]0x4E2D + [char]0x6587 + "`n", $utf8NoBom)
 
     Write-Host '=== Test 1: dry run detection ===' -ForegroundColor Cyan
+    # Normalize separators: Relative uses '/' on Linux and '\' on Windows.
     $json1 = & $guard -Path $tmp -Json | ConvertFrom-Json
-    $rel = @($json1.findings | ForEach-Object { $_.Relative })
+    $rel = @($json1.findings | ForEach-Object { $_.Relative -replace '\\', '/' })
 
     Assert 'flags bad-no-bom.ps1'                ($rel -contains 'bad-no-bom.ps1')  ('got: ' + ($rel -join ', '))
     Assert 'does not flag good-ascii.ps1'        (-not ($rel -contains 'good-ascii.ps1'))
     Assert 'does not flag good-bom.ps1'          (-not ($rel -contains 'good-bom.ps1'))
-    Assert 'skips node_modules'                  (-not ($rel -contains 'node_modules\ignored.ps1'))
+    Assert 'skips node_modules'                  (-not ($rel -contains 'node_modules/ignored.ps1'))
     Assert 'exactly 1 finding'                   ($json1.findings.Count -eq 1)      ('got ' + $json1.findings.Count)
     Assert 'mode is dry-run'                     ($json1.mode -eq 'dry-run')
     Assert 'scanned counts 3 visible files'      ($json1.scanned -eq 3)            ('got ' + $json1.scanned)
