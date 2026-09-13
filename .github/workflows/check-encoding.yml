@@ -1,0 +1,108 @@
+name: Encoding guard
+
+# The bug this tool detects is specific to Windows PowerShell 5.1, so the
+# windows-latest job below is the authoritative check. The linux job exists
+# only to confirm the script still parses and runs under PowerShell 7.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------
+  # Authoritative: Windows PowerShell 5.1 — the version that mangles
+  # UTF-8-without-BOM scripts and reports bogus bracket errors.
+  # ---------------------------------------------------------------
+  windows-ps5:
+    name: Windows PowerShell 5.1 (authoritative)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show parser version
+        shell: powershell
+        run: $PSVersionTable.PSVersion.ToString()
+
+      - name: Self-test (17 assertions)
+        shell: powershell
+        run: .\test\run-tests.ps1
+
+      - name: Scan repo for unencoded scripts (expect clean)
+        shell: powershell
+        run: |
+          # Exit codes: 0 = clean, 1 = findings, 2 = tool failure.
+          # This repository is itself the safe example, so a clean scan is expected.
+          .\fix-ps1-encoding.ps1 -Path . -Json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Expected a clean scan (exit 0), got $LASTEXITCODE"
+          }
+          Write-Host 'Scan clean.'
+
+      - name: Prove -Apply is a no-op on a clean tree
+        shell: powershell
+        run: |
+          .\fix-ps1-encoding.ps1 -Path . -Apply -Json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Expected exit code 0 after -Apply, got $LASTEXITCODE"
+          }
+
+          # NOTE: `git status --porcelain` returns an array in PowerShell and a
+          # non-empty array is truthy, so count the lines instead.
+          $changes = @(git status --porcelain)
+          if ($changes.Count -gt 0) {
+            Write-Host 'Unexpected working-tree changes:'
+            git --no-pager diff
+            throw "git status is not clean after -Apply ($($changes.Count) entries)"
+          }
+          Write-Host 'Working tree still clean.'
+
+      - name: Detect a deliberately broken fixture
+        shell: powershell
+        run: |
+          # Create a UTF-8-without-BOM file containing non-ASCII text, then
+          # confirm the guard flags it as BREAKS / RISKY and exits 1.
+          $dir = Join-Path $env:RUNNER_TEMP 'broken-fixture'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $file = Join-Path $dir 'needs-bom.ps1'
+          $text = "# " + [char]0x4E2D + [char]0x6587 + "`nWrite-Host 'hi'`n"
+          [System.IO.File]::WriteAllText($file, $text, (New-Object System.Text.UTF8Encoding($false)))
+
+          .\fix-ps1-encoding.ps1 -Path $dir -Json
+          if ($LASTEXITCODE -ne 1) {
+            throw "Expected exit 1 (findings present), got $LASTEXITCODE"
+          }
+          Write-Host 'Correctly flagged the unencoded fixture.'
+
+  # ---------------------------------------------------------------
+  # Compatibility: PowerShell 7 on Linux (no powershell.exe there).
+  # ---------------------------------------------------------------
+  linux-pwsh7:
+    name: Linux PowerShell 7 (compatibility)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show parser version
+        shell: pwsh
+        run: $PSVersionTable.PSVersion.ToString()
+
+      - name: Self-test
+        shell: pwsh
+        run: ./test/run-tests.ps1
+
+      - name: Tool runs without internal failure
+        shell: pwsh
+        run: |
+          # On PS7 the repo's own files parse fine, so findings may legitimately be 0.
+          # Exit code 2 means the tool itself failed — that is the real failure here.
+          ./fix-ps1-encoding.ps1 -Path . -Json
+          if ($LASTEXITCODE -eq 2) {
+            throw 'Tool reported an internal failure (exit 2)'
+          }
+          Write-Host 'Tool executed successfully.'

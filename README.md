@@ -77,8 +77,14 @@ Found 2 problem file(s):
 Useful for CI — fail the job when someone commits an unencoded script:
 
 ```yaml
+# GitHub Actions runners default to Linux, which ships pwsh (7.x) only —
+# there is no powershell.exe. Use the pwsh token / pwsh shell.
 - run: pwsh -File ./fix-ps1-encoding.ps1 -Path ./scripts
 ```
+
+A ready-to-use workflow, [`check-encoding.yml`](.github/workflows/check-encoding.yml),
+runs on `windows-latest` so the check matches the real Windows PowerShell 5.1
+parsing behaviour, plus a `linux` job that exercises the script under PowerShell 7.
 
 ## Options
 
