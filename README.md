@@ -1,5 +1,8 @@
 # ps1-encoding-guard
 
+[![Encoding guard](https://github.com/mikolovelive/ps1-encoding-guard/actions/workflows/check-encoding.yml/badge.svg)](https://github.com/mikolovelive/ps1-encoding-guard/actions/workflows/check-encoding.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Detect and fix PowerShell scripts that contain non-ASCII characters but lack a UTF-8 BOM — the silent cause of "double-clicked script window closes instantly" on Windows.
 
 ## The problem
